@@ -20,8 +20,6 @@ from bs4 import BeautifulSoup
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ihtrxuszzamwgpykasoh.supabase.co")
-SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
@@ -867,56 +865,32 @@ def _parse_summarization_response(result: str, expected_count: int) -> list[dict
     return []
 
 
-# ─── Supabase Storage ────────────────────────────────────────────────────────
+# ─── Google Drive CSV Storage ─────────────────────────────────────────────────
 
-def get_existing_urls() -> set:
-    """Get all existing URLs from the database to avoid duplicates."""
-    headers = {
-        "apikey": SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SERVICE_ROLE_KEY}",
-    }
-
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/news_raw?select=url",
-            headers=headers,
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            return {item["url"] for item in resp.json() if item.get("url")}
-    except Exception as e:
-        log.error(f"Failed to fetch existing URLs: {e}")
-
-    return set()
+NEWS_CSV = "news_raw.csv"
+NEWS_HEADERS = [
+    "url", "date_of_news", "datetime_of_news", "source", "category",
+    "title", "news_content", "main_picture",
+]
 
 
 def store_entries(entries: list[dict]) -> int:
-    """Store filtered entries in Supabase. Returns count of inserted rows."""
+    """Store filtered entries as CSV on Google Drive. Returns count of new rows."""
     if not entries:
         return 0
 
-    existing_urls = get_existing_urls()
-    new_entries = [e for e in entries if e["url"] not in existing_urls]
+    from drive_storage import append_csv
 
-    if not new_entries:
-        log.info("No new entries to insert (all duplicates)")
-        return 0
-
-    headers = {
-        "apikey": SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal,resolution=ignore-duplicates",
-    }
-
-    rows = []
     # Use current SGT time as the crawl timestamp
     sgt = timezone(timedelta(hours=8))
     crawl_now = datetime.now(sgt)
     crawl_date = crawl_now.strftime("%Y-%m-%d")
     crawl_datetime = crawl_now.isoformat()
-    for entry in new_entries:
+
+    rows = []
+    for entry in entries:
         rows.append({
+            "url": entry["url"],
             "date_of_news": crawl_date,
             "datetime_of_news": crawl_datetime,
             "source": entry["source"],
@@ -924,28 +898,10 @@ def store_entries(entries: list[dict]) -> int:
             "title": entry["title"][:500],
             "news_content": entry["content"][:5000],
             "main_picture": entry.get("image") or "",
-            "url": entry["url"],
         })
 
-    inserted = 0
-    batch_size = 50
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        try:
-            resp = requests.post(
-                f"{SUPABASE_URL}/rest/v1/news_raw",
-                headers=headers,
-                json=batch,
-                timeout=30,
-            )
-            if resp.status_code in (200, 201):
-                inserted += len(batch)
-                log.info(f"  Inserted batch of {len(batch)} rows")
-            else:
-                log.error(f"  Insert failed: {resp.status_code} - {resp.text[:200]}")
-        except Exception as e:
-            log.error(f"  Insert error: {e}")
-
+    # append_csv deduplicates by first header field (url)
+    inserted = append_csv(NEWS_CSV, rows, NEWS_HEADERS)
     return inserted
 
 
@@ -957,9 +913,6 @@ def main():
     log.info("=" * 60)
 
     # Validate required env vars
-    if not SERVICE_ROLE_KEY:
-        log.error("SUPABASE_SERVICE_ROLE_KEY is not set!")
-        return
     if not GEMINI_API_KEY:
         log.error("GEMINI_API_KEY is not set!")
         return
@@ -1013,8 +966,8 @@ def main():
     log.info("\nSummarizing articles...")
     summarize_articles(filtered_entries)
 
-    # Step 6: Store in Supabase
-    log.info("\nStoring entries in Supabase...")
+    # Step 6: Store in Google Drive CSV
+    log.info("\nStoring entries in Google Drive...")
     inserted = store_entries(filtered_entries)
     log.info(f"\nPipeline complete. Inserted {inserted} new entries.")
 

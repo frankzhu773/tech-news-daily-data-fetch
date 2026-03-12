@@ -12,30 +12,18 @@ from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring, indent
 
 
-def fetch_products_from_supabase():
-    """Fetch the current Product Hunt top products from Supabase."""
-    import requests
+def fetch_products_from_drive():
+    """Fetch the current Product Hunt top products from Google Drive CSV."""
+    from drive_storage import read_csv
 
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        print("ERROR: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
-        sys.exit(1)
-
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    resp = requests.get(
-        f"{SUPABASE_URL}/rest/v1/product_hunt_top_product?order=rank.asc",
-        headers=headers,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    products = read_csv("product_hunt_top_product.csv")
+    # Sort by rank and convert numeric fields
+    for p in products:
+        p["rank"] = int(p.get("rank", 0))
+        p["votes_count"] = int(p.get("votes_count", 0))
+        p["comments_count"] = int(p.get("comments_count", 0))
+    products.sort(key=lambda x: x["rank"])
+    return products
 
 
 def generate_rss_xml(products, output_path="public/feed.xml"):
@@ -224,9 +212,9 @@ def main():
     print("Product Hunt RSS Feed Generator")
     print("=" * 60)
 
-    # Fetch products from Supabase
-    products = fetch_products_from_supabase()
-    print(f"  Fetched {len(products)} products from Supabase")
+    # Fetch products from Google Drive CSV
+    products = fetch_products_from_drive()
+    print(f"  Fetched {len(products)} products from Google Drive")
 
     if not products:
         print("  ⚠ No products found, generating empty feed")

@@ -36,9 +36,9 @@ jobs:
       - name: Run Sensor Tower Fetcher
         env:
           SENSORTOWER_API_KEY: ${{ secrets.SENSORTOWER_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: python fetch_sensortower.py
 
   fetch-producthunt-top:
@@ -61,8 +61,8 @@ jobs:
         env:
           PH_API_KEY: ${{ secrets.PH_API_KEY }}
           PH_API_SECRET: ${{ secrets.PH_API_SECRET }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: python fetch_producthunt_top.py
 
   generate-rss-feed:
@@ -80,8 +80,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Generate RSS feed
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: python generate_rss.py
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

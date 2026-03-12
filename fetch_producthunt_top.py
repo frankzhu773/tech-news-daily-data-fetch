@@ -1,5 +1,5 @@
 """
-Fetch top 15 Product Hunt products of the day and store in Supabase.
+Fetch top 15 Product Hunt products of the day and store as CSV on Google Drive.
 Overwrites all previous data on each run.
 """
 
@@ -12,10 +12,13 @@ from datetime import datetime, timezone
 # ── Configuration ──────────────────────────────────────────────
 PH_API_KEY = os.environ.get("PH_API_KEY", "")
 PH_API_SECRET = os.environ.get("PH_API_SECRET", "")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
-TABLE_NAME = "product_hunt_top_product"
+CSV_FILENAME = "product_hunt_top_product.csv"
+CSV_HEADERS = [
+    "rank", "name", "tagline", "description", "url", "website_url",
+    "thumbnail_url", "votes_count", "comments_count", "topics",
+    "featured_at", "fetch_date",
+]
 
 
 def get_ph_token():
@@ -32,7 +35,7 @@ def get_ph_token():
     )
     resp.raise_for_status()
     token = resp.json()["access_token"]
-    print("  ✓ Token obtained")
+    print("  Token obtained")
     return token
 
 
@@ -87,11 +90,11 @@ def fetch_top_products(token, count=15):
     data = resp.json()
 
     if "errors" in data:
-        print(f"  ✗ GraphQL errors: {json.dumps(data['errors'])}")
+        print(f"  GraphQL errors: {json.dumps(data['errors'])}")
         sys.exit(1)
 
     posts = data["data"]["posts"]["edges"]
-    print(f"  ✓ Fetched {len(posts)} products")
+    print(f"  Fetched {len(posts)} products")
 
     results = []
     for i, edge in enumerate(posts, 1):
@@ -124,48 +127,6 @@ def fetch_top_products(token, count=15):
     return results
 
 
-def delete_all_rows():
-    """Delete all existing rows from the table."""
-    print(f"Deleting all existing rows from {TABLE_NAME}...")
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-    }
-    resp = requests.delete(
-        f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?id=gt.0",
-        headers=headers,
-        timeout=30,
-    )
-    if resp.status_code in (200, 204):
-        print("  ✓ All existing rows deleted")
-    else:
-        print(f"  ✗ Delete failed: {resp.status_code} {resp.text}")
-        sys.exit(1)
-
-
-def insert_rows(rows):
-    """Insert new rows into the table."""
-    print(f"Inserting {len(rows)} rows into {TABLE_NAME}...")
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-    resp = requests.post(
-        f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}",
-        headers=headers,
-        json=rows,
-        timeout=30,
-    )
-    if resp.status_code in (200, 201):
-        print(f"  ✓ {len(rows)} rows inserted successfully")
-    else:
-        print(f"  ✗ Insert failed: {resp.status_code} {resp.text}")
-        sys.exit(1)
-
-
 def main():
     print("=" * 60)
     print("Product Hunt Top Products Fetcher")
@@ -177,10 +138,6 @@ def main():
         missing.append("PH_API_KEY")
     if not PH_API_SECRET:
         missing.append("PH_API_SECRET")
-    if not SUPABASE_URL:
-        missing.append("SUPABASE_URL")
-    if not SUPABASE_SERVICE_ROLE_KEY:
-        missing.append("SUPABASE_SERVICE_ROLE_KEY")
     if missing:
         print(f"ERROR: Missing environment variables: {', '.join(missing)}")
         sys.exit(1)
@@ -191,14 +148,12 @@ def main():
     # Step 2: Fetch top 15 products
     products = fetch_top_products(token, count=15)
 
-    # Step 3: Delete all existing rows (overwrite)
-    delete_all_rows()
-
-    # Step 4: Insert new rows
-    insert_rows(products)
+    # Step 3: Save to Google Drive CSV (overwrites)
+    from drive_storage import upload_csv
+    upload_csv(CSV_FILENAME, products, CSV_HEADERS)
 
     print("\n" + "=" * 60)
-    print("✓ Done! Top 15 Product Hunt products stored in Supabase.")
+    print(f"Done! {len(products)} products saved to {CSV_FILENAME} on Google Drive.")
     print("=" * 60)
 
 

@@ -35,18 +35,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 ST_API_KEY = os.environ.get("SENSORTOWER_API_KEY", "")
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 ST_BASE = "https://api.sensortower.com"
-
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=minimal",
-}
 
 DATA_DELAY_DAYS = 2  # Sensor Tower data is typically 2 days behind
 
@@ -413,58 +404,29 @@ def aggregate_entities(item):
     }
 
 
-# ─── Supabase helpers ────────────────────────────────────────────────────────
-def ensure_table(table_name, sample_row):
-    """Check if table exists by trying a select."""
-    url = f"{SUPABASE_URL}/rest/v1/{table_name}?select=id&limit=1"
-    resp = requests.get(url, headers=HEADERS)
-    if resp.status_code == 200:
-        print(f"  Table '{table_name}' exists.")
-        return True
-    elif resp.status_code in (404, 406):
-        print(f"  Table '{table_name}' does not exist. Please create it in Supabase dashboard.")
-        return False
-    else:
-        print(f"  Table check error {resp.status_code}: {resp.text[:200]}")
-        return False
+# ─── Google Drive CSV helpers ─────────────────────────────────────────────────
+
+DOWNLOAD_HEADERS = [
+    "fetch_date", "period_start", "period_end", "prev_period_start", "prev_period_end",
+    "rank", "app_id", "app_name", "publisher", "icon_url",
+    "downloads", "previous_downloads", "download_delta", "download_pct_change",
+    "app_description", "ios_store_url", "android_store_url",
+]
+ADVERTISER_HEADERS = [
+    "fetch_date", "period_start", "rank", "app_id", "app_name",
+    "publisher", "icon_url", "sov", "app_description",
+    "ios_store_url", "android_store_url",
+]
 
 
-def upsert_rows(table_name, rows):
-    """Delete all existing data from the table, then insert new rows."""
+def save_to_drive(csv_filename, rows, headers):
+    """Save rows to a CSV file on Google Drive (overwrites existing)."""
     if not rows:
-        print(f"  No rows to insert into {table_name}")
+        print(f"  No rows to save to {csv_filename}")
         return
-
-    url = f"{SUPABASE_URL}/rest/v1/{table_name}"
-
-    # Step 1: Delete all existing rows from the table
-    delete_url = f"{url}?id=gt.0"
-    delete_headers = {**HEADERS, "Prefer": "return=minimal"}
-    del_resp = requests.delete(delete_url, headers=delete_headers)
-    if del_resp.status_code in (200, 204):
-        print(f"  Cleared all existing data from {table_name}")
-    else:
-        print(f"  Warning: Could not clear {table_name} (status {del_resp.status_code}): {del_resp.text[:200]}")
-
-    # Step 2: Insert new rows
-    insert_headers = {**HEADERS, "Prefer": "return=minimal"}
-    batch_size = 50
-    total_inserted = 0
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        resp = requests.post(url, headers=insert_headers, json=batch)
-        if resp.status_code in (200, 201, 204):
-            total_inserted += len(batch)
-        else:
-            print(f"  Insert error {resp.status_code}: {resp.text[:300]}")
-            for row in batch:
-                resp2 = requests.post(url, headers=insert_headers, json=row)
-                if resp2.status_code in (200, 201, 204):
-                    total_inserted += 1
-                else:
-                    print(f"    Row insert error: {resp2.text[:200]}")
-
-    print(f"  Inserted {total_inserted}/{len(rows)} rows into {table_name}")
+    from drive_storage import upload_csv
+    upload_csv(csv_filename, rows, headers)
+    print(f"  Saved {len(rows)} rows to {csv_filename}")
 
 
 # ─── Fetch functions (with parallel app lookups) ────────────────────────────
@@ -763,15 +725,8 @@ def main():
     if not ST_API_KEY:
         print("ERROR: SENSORTOWER_API_KEY not set")
         sys.exit(1)
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("ERROR: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
-        sys.exit(1)
 
     overall_start = time.monotonic()
-
-    for table in ["download_rank_7d", "download_percent_rank_7d", "advertiser_rank_7d", "download_delta_rank_7d"]:
-        if not ensure_table(table, {}):
-            print(f"WARNING: Table '{table}' may not exist. Will attempt inserts anyway.")
 
     # ─── Phase 1: Fetch all 4 ranking lists from SensorTower API ─────────
     # These 4 API calls are sequential (each is a single request), but fast (~2s each)
@@ -953,17 +908,17 @@ def main():
 
     print(f"  Phase 4 completed in {time.monotonic() - t0:.1f}s")
 
-    # ─── Phase 5: Upsert to Supabase ────────────────────────────────────
-    print("\n--- Phase 5: Upserting to Supabase ---")
+    # ─── Phase 5: Save to Google Drive CSVs ─────────────────────────────
+    print("\n--- Phase 5: Saving to Google Drive ---")
 
     if download_rows:
-        upsert_rows("download_rank_7d", download_rows)
+        save_to_drive("download_rank_7d.csv", download_rows, DOWNLOAD_HEADERS)
     if growth_rows:
-        upsert_rows("download_percent_rank_7d", growth_rows)
+        save_to_drive("download_percent_rank_7d.csv", growth_rows, DOWNLOAD_HEADERS)
     if advertiser_rows:
-        upsert_rows("advertiser_rank_7d", advertiser_rows)
+        save_to_drive("advertiser_rank_7d.csv", advertiser_rows, ADVERTISER_HEADERS)
     if delta_rows:
-        upsert_rows("download_delta_rank_7d", delta_rows)
+        save_to_drive("download_delta_rank_7d.csv", delta_rows, DOWNLOAD_HEADERS)
 
     total_time = time.monotonic() - overall_start
     print("\n" + "=" * 60)
