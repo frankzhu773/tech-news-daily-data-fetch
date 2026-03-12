@@ -1,12 +1,13 @@
 """
 Google Drive CSV Storage Utility
 
-Stores data as Google Sheets in Google Drive using a service account.
-Files are uploaded as CSV and converted to Google Sheets format, which
-does not count against the service account's storage quota.
+Stores data as Google Sheets in Google Drive using OAuth credentials.
+Files are uploaded as CSV and converted to Google Sheets format.
 
 Required environment variables:
-  GOOGLE_SERVICE_ACCOUNT_KEY  — JSON key content for a Google Cloud service account
+  GOOGLE_OAUTH_CLIENT_ID      — OAuth client ID
+  GOOGLE_OAUTH_CLIENT_SECRET  — OAuth client secret
+  GOOGLE_OAUTH_REFRESH_TOKEN  — OAuth refresh token (obtained via auth_setup.py)
   GOOGLE_DRIVE_FOLDER_ID      — ID of the Google Drive folder to store files in
 """
 
@@ -16,7 +17,8 @@ import csv
 import json
 import logging
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 
@@ -30,17 +32,31 @@ _service = None
 
 
 def get_drive_service():
-    """Authenticate and return a Google Drive API service instance (cached)."""
+    """Authenticate via OAuth refresh token and return a Drive API service (cached)."""
     global _service
     if _service:
         return _service
 
-    key_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY", "")
-    if not key_json:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_KEY is not set")
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "")
 
-    creds_info = json.loads(key_json)
-    creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    if not all([client_id, client_secret, refresh_token]):
+        raise RuntimeError(
+            "Missing Google OAuth env vars. Need: "
+            "GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN"
+        )
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+
     _service = build("drive", "v3", credentials=creds, cache_discovery=False)
     return _service
 
@@ -77,8 +93,7 @@ def _rows_to_csv_bytes(rows, headers):
 def upload_csv(filename, rows, headers):
     """Upload (or replace) data as a Google Sheet in Google Drive.
 
-    Creates a Google Sheet (converted from CSV) which doesn't count against
-    the service account's storage quota.
+    Creates a new Google Sheet if one doesn't exist, or updates the existing one.
 
     Args:
         filename: Display name of the file (e.g. "news_raw.csv")
@@ -94,14 +109,12 @@ def upload_csv(filename, rows, headers):
     existing_id = find_file(filename)
 
     if existing_id:
-        # Update existing sheet with new CSV content
         service.files().update(
             fileId=existing_id,
             media_body=media,
         ).execute()
         print(f"  Updated {filename} ({len(rows)} rows)")
     else:
-        # Create new file — convert CSV to Google Sheets format (no quota cost)
         metadata = {
             "name": filename,
             "parents": [folder_id],
