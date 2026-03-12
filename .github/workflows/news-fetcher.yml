@@ -1,0 +1,34 @@
+name: News Fetcher
+
+on:
+  schedule:
+    # Runs at 17 minutes past every hour
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run news fetcher
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PH_API_KEY: ${{ secrets.PH_API_KEY }}
+          PH_API_SECRET: ${{ secrets.PH_API_SECRET }}
+        run: python fetch_news.py
