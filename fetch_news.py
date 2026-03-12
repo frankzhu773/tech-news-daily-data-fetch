@@ -879,7 +879,7 @@ def store_entries(entries: list[dict]) -> int:
     if not entries:
         return 0
 
-    from drive_storage import append_csv
+    from drive_storage import append_by_url
 
     # Use current SGT time as the crawl timestamp
     sgt = timezone(timedelta(hours=8))
@@ -900,8 +900,7 @@ def store_entries(entries: list[dict]) -> int:
             "main_picture": entry.get("image") or "",
         })
 
-    # append_csv deduplicates by first header field (url)
-    inserted = append_csv(NEWS_CSV, rows, NEWS_HEADERS)
+    inserted = append_by_url(NEWS_CSV, rows, NEWS_HEADERS)
     return inserted
 
 

@@ -148,9 +148,9 @@ def main():
     # Step 2: Fetch top 15 products
     products = fetch_top_products(token, count=15)
 
-    # Step 3: Save to Google Drive CSV (overwrites)
-    from drive_storage import upload_csv
-    upload_csv(CSV_FILENAME, products, CSV_HEADERS)
+    # Step 3: Save to Google Drive CSV (upserts by date)
+    from drive_storage import upsert_by_date
+    upsert_by_date(CSV_FILENAME, products, CSV_HEADERS, date_field="fetch_date")
 
     print("\n" + "=" * 60)
     print(f"Done! {len(products)} products saved to {CSV_FILENAME} on Google Drive.")

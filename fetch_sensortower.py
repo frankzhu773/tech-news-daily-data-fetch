@@ -420,13 +420,12 @@ ADVERTISER_HEADERS = [
 
 
 def save_to_drive(csv_filename, rows, headers):
-    """Save rows to a CSV file on Google Drive (overwrites existing)."""
+    """Save rows to a monthly CSV file on Google Drive (upserts by fetch_date)."""
     if not rows:
         print(f"  No rows to save to {csv_filename}")
         return
-    from drive_storage import upload_csv
-    upload_csv(csv_filename, rows, headers)
-    print(f"  Saved {len(rows)} rows to {csv_filename}")
+    from drive_storage import upsert_by_date
+    upsert_by_date(csv_filename, rows, headers, date_field="fetch_date")
 
 
 # ─── Fetch functions (with parallel app lookups) ────────────────────────────
