@@ -1,9 +1,9 @@
 """
 Google Drive CSV Storage Utility
 
-Provides helpers to upload, read, and append CSV files on Google Drive
-using a service account. Used by all fetcher scripts as a replacement
-for Supabase storage.
+Stores data as Google Sheets in Google Drive using a service account.
+Files are uploaded as CSV and converted to Google Sheets format, which
+does not count against the service account's storage quota.
 
 Required environment variables:
   GOOGLE_SERVICE_ACCOUNT_KEY  — JSON key content for a Google Cloud service account
@@ -18,11 +18,13 @@ import logging
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaInMemoryUpload
 
 log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
 _service = None
 
@@ -62,85 +64,84 @@ def find_file(filename):
     return files[0]["id"] if files else None
 
 
+def _rows_to_csv_bytes(rows, headers):
+    """Convert a list of dicts to CSV bytes."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return buf.getvalue().encode("utf-8")
+
+
 def upload_csv(filename, rows, headers):
-    """Upload (or replace) a CSV file in Google Drive.
+    """Upload (or replace) data as a Google Sheet in Google Drive.
+
+    Creates a Google Sheet (converted from CSV) which doesn't count against
+    the service account's storage quota.
 
     Args:
-        filename: Name of the CSV file (e.g. "news_raw.csv")
+        filename: Display name of the file (e.g. "news_raw.csv")
         rows: List of dicts to write
         headers: List of column names
     """
     service = get_drive_service()
     folder_id = get_folder_id()
 
-    # Build CSV content in memory
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-
-    content = buf.getvalue().encode("utf-8")
+    content = _rows_to_csv_bytes(rows, headers)
     media = MediaInMemoryUpload(content, mimetype="text/csv")
 
-    # Check if file already exists
     existing_id = find_file(filename)
 
     if existing_id:
-        # Update existing file
+        # Update existing sheet with new CSV content
         service.files().update(
             fileId=existing_id,
             media_body=media,
         ).execute()
-        log.info(f"Updated {filename} ({len(rows)} rows)")
+        print(f"  Updated {filename} ({len(rows)} rows)")
     else:
-        # Create new file
+        # Create new file — convert CSV to Google Sheets format (no quota cost)
         metadata = {
             "name": filename,
             "parents": [folder_id],
-            "mimeType": "text/csv",
+            "mimeType": SHEETS_MIME,
         }
         service.files().create(
             body=metadata,
             media_body=media,
         ).execute()
-        log.info(f"Created {filename} ({len(rows)} rows)")
+        print(f"  Created {filename} ({len(rows)} rows)")
 
     return len(rows)
 
 
 def read_csv(filename):
-    """Read a CSV file from Google Drive. Returns list of dicts, or empty list if not found."""
+    """Read a Google Sheet from Drive as CSV. Returns list of dicts, or empty list if not found."""
     service = get_drive_service()
     file_id = find_file(filename)
 
     if not file_id:
-        log.info(f"{filename} not found in Drive")
+        print(f"  {filename} not found in Drive")
         return []
 
-    request = service.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
+    # Export Google Sheet as CSV
+    csv_bytes = service.files().export(fileId=file_id, mimeType="text/csv").execute()
 
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-
-    buf.seek(0)
-    text = buf.read().decode("utf-8")
+    text = csv_bytes.decode("utf-8")
     reader = csv.DictReader(io.StringIO(text))
     rows = list(reader)
-    log.info(f"Read {len(rows)} rows from {filename}")
+    print(f"  Read {len(rows)} rows from {filename}")
     return rows
 
 
 def append_csv(filename, new_rows, headers):
-    """Append rows to an existing CSV (or create if it doesn't exist).
+    """Append rows to an existing sheet (or create if it doesn't exist).
 
     Deduplicates by the first column in headers (assumed to be a unique key like 'url').
 
     Args:
-        filename: CSV filename on Drive
+        filename: File name on Drive
         new_rows: List of dicts to append
         headers: List of column names (first one used as dedup key)
 
@@ -156,10 +157,10 @@ def append_csv(filename, new_rows, headers):
     unique_new = [r for r in new_rows if r.get(key_field) not in existing_keys]
 
     if not unique_new:
-        log.info(f"No new rows to append to {filename}")
+        print(f"  No new rows to append to {filename}")
         return 0
 
     all_rows = existing + unique_new
     upload_csv(filename, all_rows, headers)
-    log.info(f"Appended {len(unique_new)} new rows to {filename} (total: {len(all_rows)})")
+    print(f"  Appended {len(unique_new)} new rows to {filename} (total: {len(all_rows)})")
     return len(unique_new)
