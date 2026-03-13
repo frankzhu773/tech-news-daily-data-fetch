@@ -125,10 +125,20 @@ def get_cumulative_folder(year=None):
     return ensure_subfolder(year_folder, "Cumulative")
 
 
-def _normalize_filename(base_name):
-    """Ensure filename has .xlsx extension."""
+def _latest_filename(base_name, year=None):
+    """Generate Latest filename: news_raw -> news_raw_2026_latest.xlsx"""
+    if year is None:
+        year = datetime.now(timezone.utc).year
     base = base_name.removesuffix(".xlsx").removesuffix(".csv")
-    return f"{base}.xlsx"
+    return f"{base}_{year}_latest.xlsx"
+
+
+def _cumulative_filename(base_name, year=None):
+    """Generate Cumulative filename: news_raw -> news_raw_2026.xlsx"""
+    if year is None:
+        year = datetime.now(timezone.utc).year
+    base = base_name.removesuffix(".xlsx").removesuffix(".csv")
+    return f"{base}_{year}.xlsx"
 
 
 # ─── File operations ─────────────────────────────────────────────────────────
@@ -210,16 +220,17 @@ def save_latest_and_cumulative(base_filename, rows, headers, dedup_keys):
         print(f"  No rows to save for {base_filename}")
         return 0
 
-    filename = _normalize_filename(base_filename)
+    latest_name = _latest_filename(base_filename)
+    cumulative_name = _cumulative_filename(base_filename)
 
     # Step 1: Overwrite Latest
     latest_folder = get_latest_folder()
-    _write_xlsx_to_folder(filename, rows, headers, latest_folder)
-    print(f"  [Latest] Wrote {len(rows)} rows to {filename}")
+    _write_xlsx_to_folder(latest_name, rows, headers, latest_folder)
+    print(f"  [Latest] Wrote {len(rows)} rows to {latest_name}")
 
     # Step 2: Upsert into Cumulative
     cumulative_folder = get_cumulative_folder()
-    file_id = find_file_in_folder(filename, cumulative_folder)
+    file_id = find_file_in_folder(cumulative_name, cumulative_folder)
 
     if file_id:
         existing = _read_xlsx_by_id(file_id)
@@ -237,8 +248,8 @@ def save_latest_and_cumulative(base_filename, rows, headers, dedup_keys):
     else:
         all_rows = rows
 
-    _write_xlsx_to_folder(filename, all_rows, headers, cumulative_folder)
-    print(f"  [Cumulative] Saved {len(rows)} new rows to {filename} (total: {len(all_rows)})")
+    _write_xlsx_to_folder(cumulative_name, all_rows, headers, cumulative_folder)
+    print(f"  [Cumulative] Saved {len(rows)} new rows to {cumulative_name} (total: {len(all_rows)})")
     return len(rows)
 
 
@@ -247,7 +258,7 @@ def save_latest_and_cumulative(base_filename, rows, headers, dedup_keys):
 def read_latest(base_filename, year=None):
     """Read an XLSX file from the Latest folder. Returns list of dicts."""
     folder_id = get_latest_folder(year)
-    filename = _normalize_filename(base_filename)
+    filename = _latest_filename(base_filename, year)
 
     file_id = find_file_in_folder(filename, folder_id)
     if not file_id:
@@ -262,7 +273,7 @@ def read_latest(base_filename, year=None):
 def read_cumulative(base_filename, year=None):
     """Read an XLSX file from the Cumulative folder. Returns list of dicts."""
     folder_id = get_cumulative_folder(year)
-    filename = _normalize_filename(base_filename)
+    filename = _cumulative_filename(base_filename, year)
 
     file_id = find_file_in_folder(filename, folder_id)
     if not file_id:
