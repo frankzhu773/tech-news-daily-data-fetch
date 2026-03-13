@@ -865,9 +865,9 @@ def _parse_summarization_response(result: str, expected_count: int) -> list[dict
     return []
 
 
-# ─── Google Drive CSV Storage ─────────────────────────────────────────────────
+# ─── Google Drive XLSX Storage ────────────────────────────────────────────────
 
-NEWS_CSV = "news_raw.csv"
+NEWS_CSV = "news_raw.xlsx"
 NEWS_HEADERS = [
     "url", "date_of_news", "datetime_of_news", "source", "category",
     "title", "news_content", "main_picture",

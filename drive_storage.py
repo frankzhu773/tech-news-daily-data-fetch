@@ -1,15 +1,15 @@
 """
-Google Drive CSV Storage Utility
+Google Drive XLSX Storage Utility
 
-Stores data as Google Sheets in Google Drive using OAuth credentials.
+Stores data as .xlsx files in Google Drive using OAuth credentials.
 Data is organized by year/month folders with monthly files.
 
 Folder structure:
   GOOGLE_DRIVE_FOLDER_ID/
     2026/
       Mar/
-        news_raw_2026_Mar          (Google Sheet)
-        download_rank_7d_2026_Mar  (Google Sheet)
+        news_raw_2026_Mar.xlsx
+        download_rank_7d_2026_Mar.xlsx
         ...
       Apr/
         ...
@@ -23,8 +23,6 @@ Required environment variables:
 
 import os
 import io
-import csv
-import json
 import logging
 from datetime import datetime, timezone
 
@@ -32,11 +30,12 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
+from openpyxl import Workbook, load_workbook
 
 log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
-SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
 MONTH_ABBRS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -129,7 +128,7 @@ def get_monthly_folder(year=None, month=None):
 def get_monthly_filename(base_name, year=None, month=None):
     """Generate monthly filename with suffix.
 
-    Example: news_raw.csv -> news_raw_2026_Mar
+    Example: news_raw.xlsx -> news_raw_2026_Mar.xlsx
     """
     if year is None or month is None:
         now = datetime.now(timezone.utc)
@@ -137,8 +136,8 @@ def get_monthly_filename(base_name, year=None, month=None):
         month = now.month
 
     month_abbr = MONTH_ABBRS[month - 1]
-    base = base_name.removesuffix(".csv")
-    return f"{base}_{year}_{month_abbr}"
+    base = base_name.removesuffix(".xlsx").removesuffix(".csv")
+    return f"{base}_{year}_{month_abbr}.xlsx"
 
 
 # ─── File operations ─────────────────────────────────────────────────────────
@@ -152,32 +151,38 @@ def find_file_in_folder(filename, folder_id):
     return files[0]["id"] if files else None
 
 
-def _rows_to_csv_bytes(rows, headers):
-    """Convert a list of dicts to CSV bytes."""
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
-    writer.writeheader()
+def _rows_to_xlsx_bytes(rows, headers):
+    """Convert a list of dicts to XLSX bytes."""
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
     for row in rows:
-        writer.writerow(row)
-    return buf.getvalue().encode("utf-8")
+        ws.append([row.get(h, "") for h in headers])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
-def _read_csv_by_id(file_id):
-    """Read a Google Sheet by file ID, return list of dicts."""
+def _read_xlsx_by_id(file_id):
+    """Read an XLSX file by file ID, return list of dicts."""
     service = get_drive_service()
-    csv_bytes = service.files().export(fileId=file_id, mimeType="text/csv").execute()
-    text = csv_bytes.decode("utf-8")
-    if not text.strip():
+    content = service.files().get_media(fileId=file_id).execute()
+    if not content:
         return []
-    reader = csv.DictReader(io.StringIO(text))
-    return list(reader)
+    wb = load_workbook(io.BytesIO(content), read_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
+    headers = next(rows_iter, None)
+    if not headers:
+        return []
+    return [{h: (cell if cell is not None else "") for h, cell in zip(headers, row)} for row in rows_iter]
 
 
-def _write_csv_to_folder(filename, rows, headers, folder_id):
-    """Write rows as a Google Sheet in the specified folder (create or update)."""
+def _write_xlsx_to_folder(filename, rows, headers, folder_id):
+    """Write rows as an XLSX file in the specified folder (create or update)."""
     service = get_drive_service()
-    content = _rows_to_csv_bytes(rows, headers)
-    media = MediaInMemoryUpload(content, mimetype="text/csv")
+    content = _rows_to_xlsx_bytes(rows, headers)
+    media = MediaInMemoryUpload(content, mimetype=XLSX_MIME)
 
     existing_id = find_file_in_folder(filename, folder_id)
 
@@ -188,7 +193,7 @@ def _write_csv_to_folder(filename, rows, headers, folder_id):
         metadata = {
             "name": filename,
             "parents": [folder_id],
-            "mimeType": SHEETS_MIME,
+            "mimeType": XLSX_MIME,
         }
         service.files().create(body=metadata, media_body=media).execute()
         print(f"  Created {filename} ({len(rows)} rows)")
@@ -203,7 +208,7 @@ def upsert_by_date(base_filename, rows, headers, date_field="fetch_date"):
     If data for that date already exists, it is deleted and replaced.
 
     Args:
-        base_filename: Base name (e.g. "download_rank_7d.csv")
+        base_filename: Base name (e.g. "download_rank_7d.xlsx")
         rows: List of dicts to store
         headers: Column names
         date_field: Field used to identify the day's data
@@ -218,7 +223,7 @@ def upsert_by_date(base_filename, rows, headers, date_field="fetch_date"):
     file_id = find_file_in_folder(filename, folder_id)
 
     if file_id:
-        existing = _read_csv_by_id(file_id)
+        existing = _read_xlsx_by_id(file_id)
         new_dates = {r[date_field] for r in rows if date_field in r}
         filtered = [r for r in existing if r.get(date_field) not in new_dates]
         replaced = len(existing) - len(filtered)
@@ -228,7 +233,7 @@ def upsert_by_date(base_filename, rows, headers, date_field="fetch_date"):
     else:
         all_rows = rows
 
-    _write_csv_to_folder(filename, all_rows, headers, folder_id)
+    _write_xlsx_to_folder(filename, all_rows, headers, folder_id)
     print(f"  Saved {len(rows)} rows to {filename} (total: {len(all_rows)})")
     return len(rows)
 
@@ -240,7 +245,7 @@ def append_by_url(base_filename, rows, headers, url_field="url"):
     Each article is identified by its URL. Duplicates are skipped.
 
     Args:
-        base_filename: Base name (e.g. "news_raw.csv")
+        base_filename: Base name (e.g. "news_raw.xlsx")
         rows: List of dicts to append
         headers: Column names
         url_field: Field used for deduplication
@@ -257,7 +262,7 @@ def append_by_url(base_filename, rows, headers, url_field="url"):
     file_id = find_file_in_folder(filename, folder_id)
 
     if file_id:
-        existing = _read_csv_by_id(file_id)
+        existing = _read_xlsx_by_id(file_id)
         existing_urls = {r.get(url_field) for r in existing}
         unique_new = [r for r in rows if r.get(url_field) not in existing_urls]
 
@@ -270,13 +275,13 @@ def append_by_url(base_filename, rows, headers, url_field="url"):
         unique_new = rows
         all_rows = rows
 
-    _write_csv_to_folder(filename, all_rows, headers, folder_id)
+    _write_xlsx_to_folder(filename, all_rows, headers, folder_id)
     print(f"  Appended {len(unique_new)} new rows to {filename} (total: {len(all_rows)})")
     return len(unique_new)
 
 
-def read_monthly_csv(base_filename, year=None, month=None):
-    """Read a monthly CSV file. Returns list of dicts or empty list."""
+def read_monthly_xlsx(base_filename, year=None, month=None):
+    """Read a monthly XLSX file. Returns list of dicts or empty list."""
     folder_id = get_monthly_folder(year, month)
     filename = get_monthly_filename(base_filename, year, month)
 
@@ -285,7 +290,7 @@ def read_monthly_csv(base_filename, year=None, month=None):
         print(f"  {filename} not found")
         return []
 
-    rows = _read_csv_by_id(file_id)
+    rows = _read_xlsx_by_id(file_id)
     print(f"  Read {len(rows)} rows from {filename}")
     return rows
 
@@ -297,18 +302,18 @@ def find_file(filename):
     return find_file_in_folder(filename, get_folder_id())
 
 
-def read_csv(filename):
-    """Read CSV from root folder."""
+def read_xlsx(filename):
+    """Read XLSX from root folder."""
     file_id = find_file(filename)
     if not file_id:
         print(f"  {filename} not found in Drive")
         return []
-    rows = _read_csv_by_id(file_id)
+    rows = _read_xlsx_by_id(file_id)
     print(f"  Read {len(rows)} rows from {filename}")
     return rows
 
 
-def upload_csv(filename, rows, headers):
-    """Upload CSV to the root folder."""
-    _write_csv_to_folder(filename, rows, headers, get_folder_id())
+def upload_xlsx(filename, rows, headers):
+    """Upload XLSX to the root folder."""
+    _write_xlsx_to_folder(filename, rows, headers, get_folder_id())
     return len(rows)

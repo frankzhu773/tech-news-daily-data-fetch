@@ -907,17 +907,17 @@ def main():
 
     print(f"  Phase 4 completed in {time.monotonic() - t0:.1f}s")
 
-    # ─── Phase 5: Save to Google Drive CSVs ─────────────────────────────
+    # ─── Phase 5: Save to Google Drive XLSX ─────────────────────────────
     print("\n--- Phase 5: Saving to Google Drive ---")
 
     if download_rows:
-        save_to_drive("download_rank_7d.csv", download_rows, DOWNLOAD_HEADERS)
+        save_to_drive("download_rank_7d.xlsx", download_rows, DOWNLOAD_HEADERS)
     if growth_rows:
-        save_to_drive("download_percent_rank_7d.csv", growth_rows, DOWNLOAD_HEADERS)
+        save_to_drive("download_percent_rank_7d.xlsx", growth_rows, DOWNLOAD_HEADERS)
     if advertiser_rows:
-        save_to_drive("advertiser_rank_7d.csv", advertiser_rows, ADVERTISER_HEADERS)
+        save_to_drive("advertiser_rank_7d.xlsx", advertiser_rows, ADVERTISER_HEADERS)
     if delta_rows:
-        save_to_drive("download_delta_rank_7d.csv", delta_rows, DOWNLOAD_HEADERS)
+        save_to_drive("download_delta_rank_7d.xlsx", delta_rows, DOWNLOAD_HEADERS)
 
     total_time = time.monotonic() - overall_start
     print("\n" + "=" * 60)

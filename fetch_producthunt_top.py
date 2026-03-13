@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 PH_API_KEY = os.environ.get("PH_API_KEY", "")
 PH_API_SECRET = os.environ.get("PH_API_SECRET", "")
 
-CSV_FILENAME = "product_hunt_top_product.csv"
+CSV_FILENAME = "product_hunt_top_product.xlsx"
 CSV_HEADERS = [
     "rank", "name", "tagline", "description", "url", "website_url",
     "thumbnail_url", "votes_count", "comments_count", "topics",

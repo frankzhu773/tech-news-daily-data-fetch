@@ -26,9 +26,9 @@ PAGES_BASE_URL = "https://frankzhu773.github.io/tech-news-daily-data-fetch"
 # ─── Google Drive CSV fetching ─────────────────────────────────────────────
 
 def fetch_all_digests():
-    """Fetch all digests from Google Drive CSV."""
-    from drive_storage import read_csv
-    digests = read_csv("weekly_digests.csv")
+    """Fetch all digests from Google Drive XLSX."""
+    from drive_storage import read_xlsx
+    digests = read_xlsx("weekly_digests.xlsx")
     # Sort by published_at descending, limit to 52
     digests.sort(key=lambda x: x.get("published_at", ""), reverse=True)
     return digests[:52]

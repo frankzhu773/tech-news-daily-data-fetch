@@ -4,3 +4,4 @@ beautifulsoup4>=4.12
 google-api-python-client>=2.100
 google-auth>=2.23
 google-auth-oauthlib>=1.0
+openpyxl>=3.1
