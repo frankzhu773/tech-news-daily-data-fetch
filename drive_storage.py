@@ -2,16 +2,18 @@
 Google Drive XLSX Storage Utility
 
 Stores data as .xlsx files in Google Drive using OAuth credentials.
-Data is organized by year/month folders with monthly files.
+Data is organized into Latest (overwritten) and Cumulative (upserted) folders.
 
 Folder structure:
   GOOGLE_DRIVE_FOLDER_ID/
     2026/
-      Mar/
-        news_raw_2026_Mar.xlsx
-        download_rank_7d_2026_Mar.xlsx
+      Latest/
+        news_raw.xlsx
+        download_rank_7d.xlsx
         ...
-      Apr/
+      Cumulative/
+        news_raw.xlsx
+        download_rank_7d.xlsx
         ...
 
 Required environment variables:
@@ -37,9 +39,6 @@ log = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
-
-MONTH_ABBRS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 _service = None
 
@@ -106,38 +105,30 @@ def ensure_subfolder(parent_id, folder_name):
     return folder["id"]
 
 
-def get_monthly_folder(year=None, month=None):
-    """Get (or create) the monthly subfolder. Returns folder ID.
-
-    Structure: root / {year} / {month_abbr}
-    Example:   root / 2026 / Mar
-    """
-    if year is None or month is None:
-        now = datetime.now(timezone.utc)
-        year = now.year
-        month = now.month
-
-    month_abbr = MONTH_ABBRS[month - 1]
-
+def _get_year_folder(year=None):
+    """Get (or create) the year subfolder under root. Returns folder ID."""
+    if year is None:
+        year = datetime.now(timezone.utc).year
     root = get_folder_id()
-    year_folder = ensure_subfolder(root, str(year))
-    month_folder = ensure_subfolder(year_folder, month_abbr)
-    return month_folder
+    return ensure_subfolder(root, str(year))
 
 
-def get_monthly_filename(base_name, year=None, month=None):
-    """Generate monthly filename with suffix.
+def get_latest_folder(year=None):
+    """Get (or create) the Latest folder: root/{year}/Latest."""
+    year_folder = _get_year_folder(year)
+    return ensure_subfolder(year_folder, "Latest")
 
-    Example: news_raw.xlsx -> news_raw_2026_Mar.xlsx
-    """
-    if year is None or month is None:
-        now = datetime.now(timezone.utc)
-        year = now.year
-        month = now.month
 
-    month_abbr = MONTH_ABBRS[month - 1]
+def get_cumulative_folder(year=None):
+    """Get (or create) the Cumulative folder: root/{year}/Cumulative."""
+    year_folder = _get_year_folder(year)
+    return ensure_subfolder(year_folder, "Cumulative")
+
+
+def _normalize_filename(base_name):
+    """Ensure filename has .xlsx extension."""
     base = base_name.removesuffix(".xlsx").removesuffix(".csv")
-    return f"{base}_{year}_{month_abbr}.xlsx"
+    return f"{base}.xlsx"
 
 
 # ─── File operations ─────────────────────────────────────────────────────────
@@ -201,101 +192,89 @@ def _write_xlsx_to_folder(filename, rows, headers, folder_id):
 
 # ─── High-level storage functions ────────────────────────────────────────────
 
-def upsert_by_date(base_filename, rows, headers, date_field="fetch_date"):
-    """Store rows in the monthly file, replacing existing data for the same date.
+def save_latest_and_cumulative(base_filename, rows, headers, dedup_keys):
+    """Two-step save: overwrite Latest, then upsert into Cumulative.
 
-    Used for: Sensor Tower rankings, Product Hunt top products.
-    If data for that date already exists, it is deleted and replaced.
+    Step 1 — Latest: Overwrite the file with only the new rows.
+    Step 2 — Cumulative: Read existing data, merge with new rows
+             deduplicating by dedup_keys (new rows win on conflict).
 
     Args:
-        base_filename: Base name (e.g. "download_rank_7d.xlsx")
+        base_filename: File name (e.g. "download_rank_7d.xlsx")
         rows: List of dicts to store
         headers: Column names
-        date_field: Field used to identify the day's data
+        dedup_keys: List of field names that together form a unique key
+                    (should NOT include volatile fields like datetime_of_news)
     """
     if not rows:
         print(f"  No rows to save for {base_filename}")
         return 0
 
-    folder_id = get_monthly_folder()
-    filename = get_monthly_filename(base_filename)
+    filename = _normalize_filename(base_filename)
 
-    file_id = find_file_in_folder(filename, folder_id)
+    # Step 1: Overwrite Latest
+    latest_folder = get_latest_folder()
+    _write_xlsx_to_folder(filename, rows, headers, latest_folder)
+    print(f"  [Latest] Wrote {len(rows)} rows to {filename}")
+
+    # Step 2: Upsert into Cumulative
+    cumulative_folder = get_cumulative_folder()
+    file_id = find_file_in_folder(filename, cumulative_folder)
 
     if file_id:
         existing = _read_xlsx_by_id(file_id)
-        new_dates = {r[date_field] for r in rows if date_field in r}
-        filtered = [r for r in existing if r.get(date_field) not in new_dates]
+        # Build a set of composite keys from the new rows
+        def _make_key(row):
+            return tuple(str(row.get(k, "")) for k in dedup_keys)
+
+        new_keys = {_make_key(r) for r in rows}
+        # Keep existing rows whose key is NOT in the new batch
+        filtered = [r for r in existing if _make_key(r) not in new_keys]
         replaced = len(existing) - len(filtered)
         all_rows = filtered + rows
         if replaced:
-            print(f"  Replacing {replaced} existing rows for date(s): {new_dates}")
+            print(f"  [Cumulative] Replacing {replaced} existing rows")
     else:
         all_rows = rows
 
-    _write_xlsx_to_folder(filename, all_rows, headers, folder_id)
-    print(f"  Saved {len(rows)} rows to {filename} (total: {len(all_rows)})")
+    _write_xlsx_to_folder(filename, all_rows, headers, cumulative_folder)
+    print(f"  [Cumulative] Saved {len(rows)} new rows to {filename} (total: {len(all_rows)})")
     return len(rows)
 
 
-def append_by_url(base_filename, rows, headers, url_field="url"):
-    """Append rows to the monthly file, skipping rows with duplicate URLs.
+# ─── Read helpers ─────────────────────────────────────────────────────────────
 
-    Used for: News articles.
-    Each article is identified by its URL. Duplicates are skipped.
-
-    Args:
-        base_filename: Base name (e.g. "news_raw.xlsx")
-        rows: List of dicts to append
-        headers: Column names
-        url_field: Field used for deduplication
-
-    Returns:
-        Number of new rows actually appended
-    """
-    if not rows:
-        return 0
-
-    folder_id = get_monthly_folder()
-    filename = get_monthly_filename(base_filename)
-
-    file_id = find_file_in_folder(filename, folder_id)
-
-    if file_id:
-        existing = _read_xlsx_by_id(file_id)
-        existing_urls = {r.get(url_field) for r in existing}
-        unique_new = [r for r in rows if r.get(url_field) not in existing_urls]
-
-        if not unique_new:
-            print(f"  No new rows to append to {filename}")
-            return 0
-
-        all_rows = existing + unique_new
-    else:
-        unique_new = rows
-        all_rows = rows
-
-    _write_xlsx_to_folder(filename, all_rows, headers, folder_id)
-    print(f"  Appended {len(unique_new)} new rows to {filename} (total: {len(all_rows)})")
-    return len(unique_new)
-
-
-def read_monthly_xlsx(base_filename, year=None, month=None):
-    """Read a monthly XLSX file. Returns list of dicts or empty list."""
-    folder_id = get_monthly_folder(year, month)
-    filename = get_monthly_filename(base_filename, year, month)
+def read_latest(base_filename, year=None):
+    """Read an XLSX file from the Latest folder. Returns list of dicts."""
+    folder_id = get_latest_folder(year)
+    filename = _normalize_filename(base_filename)
 
     file_id = find_file_in_folder(filename, folder_id)
     if not file_id:
-        print(f"  {filename} not found")
+        print(f"  {filename} not found in Latest")
         return []
 
     rows = _read_xlsx_by_id(file_id)
-    print(f"  Read {len(rows)} rows from {filename}")
+    print(f"  Read {len(rows)} rows from Latest/{filename}")
     return rows
 
 
-# ─── Legacy functions (for weekly digest, etc.) ──────────────────────────────
+def read_cumulative(base_filename, year=None):
+    """Read an XLSX file from the Cumulative folder. Returns list of dicts."""
+    folder_id = get_cumulative_folder(year)
+    filename = _normalize_filename(base_filename)
+
+    file_id = find_file_in_folder(filename, folder_id)
+    if not file_id:
+        print(f"  {filename} not found in Cumulative")
+        return []
+
+    rows = _read_xlsx_by_id(file_id)
+    print(f"  Read {len(rows)} rows from Cumulative/{filename}")
+    return rows
+
+
+# ─── Legacy helpers (root folder) ────────────────────────────────────────────
 
 def find_file(filename):
     """Find a file by name in the root folder. Returns file ID or None."""

@@ -148,9 +148,11 @@ def main():
     # Step 2: Fetch top 15 products
     products = fetch_top_products(token, count=15)
 
-    # Step 3: Save to Google Drive CSV (upserts by date)
-    from drive_storage import upsert_by_date
-    upsert_by_date(CSV_FILENAME, products, CSV_HEADERS, date_field="fetch_date")
+    # Step 3: Save to Google Drive (Latest + Cumulative)
+    from drive_storage import save_latest_and_cumulative
+    save_latest_and_cumulative(
+        CSV_FILENAME, products, CSV_HEADERS, dedup_keys=["fetch_date", "url"]
+    )
 
     print("\n" + "=" * 60)
     print(f"Done! {len(products)} products saved to {CSV_FILENAME} on Google Drive.")

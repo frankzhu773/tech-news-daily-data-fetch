@@ -419,13 +419,15 @@ ADVERTISER_HEADERS = [
 ]
 
 
-def save_to_drive(csv_filename, rows, headers):
-    """Save rows to a monthly CSV file on Google Drive (upserts by fetch_date)."""
+def save_to_drive(filename, rows, headers, dedup_keys=None):
+    """Save rows to Google Drive (Latest + Cumulative)."""
     if not rows:
-        print(f"  No rows to save to {csv_filename}")
+        print(f"  No rows to save to {filename}")
         return
-    from drive_storage import upsert_by_date
-    upsert_by_date(csv_filename, rows, headers, date_field="fetch_date")
+    from drive_storage import save_latest_and_cumulative
+    if dedup_keys is None:
+        dedup_keys = ["fetch_date", "app_id"]
+    save_latest_and_cumulative(filename, rows, headers, dedup_keys=dedup_keys)
 
 
 # ─── Fetch functions (with parallel app lookups) ────────────────────────────

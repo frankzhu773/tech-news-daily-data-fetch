@@ -13,10 +13,10 @@ from xml.etree.ElementTree import Element, SubElement, tostring, indent
 
 
 def fetch_products_from_drive():
-    """Fetch the current Product Hunt top products from the monthly Google Drive XLSX."""
-    from drive_storage import read_monthly_xlsx
+    """Fetch the current Product Hunt top products from the Latest folder."""
+    from drive_storage import read_latest
 
-    products = read_monthly_xlsx("product_hunt_top_product.xlsx")
+    products = read_latest("product_hunt_top_product.xlsx")
     # Sort by rank and convert numeric fields
     for p in products:
         p["rank"] = int(p.get("rank", 0))

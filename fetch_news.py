@@ -879,7 +879,7 @@ def store_entries(entries: list[dict]) -> int:
     if not entries:
         return 0
 
-    from drive_storage import append_by_url
+    from drive_storage import save_latest_and_cumulative
 
     # Use current SGT time as the crawl timestamp
     sgt = timezone(timedelta(hours=8))
@@ -900,7 +900,9 @@ def store_entries(entries: list[dict]) -> int:
             "main_picture": entry.get("image") or "",
         })
 
-    inserted = append_by_url(NEWS_CSV, rows, NEWS_HEADERS)
+    inserted = save_latest_and_cumulative(
+        NEWS_CSV, rows, NEWS_HEADERS, dedup_keys=["url"]
+    )
     return inserted
 
 
