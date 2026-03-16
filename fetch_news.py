@@ -20,8 +20,9 @@ from bs4 import BeautifulSoup
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+# LLM via OpenAI-compatible API (pre-configured with OPENAI_API_KEY and OPENAI_BASE_URL)
+# Uses gemini-2.5-flash model
+LLM_MODEL = "gemini-2.5-flash"
 
 
 RSS_FEEDS = [
@@ -102,77 +103,46 @@ LLM_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def call_llm(prompt: str, system: str = "", max_tokens: int = 2000, use_search: bool = True) -> str:
-    """Call Gemini 2.5 Flash and return the response text.
+    """Call gemini-2.5-flash via OpenAI-compatible API and return the response text.
     
-    Retries up to LLM_MAX_RETRIES times with exponential backoff for transient
-    errors (429, 500, 502, 503, 504).
+    Retries up to LLM_MAX_RETRIES times with exponential backoff for transient errors.
     
     Args:
-        use_search: If True, enable Google Search grounding. Disable for translation.
+        use_search: Ignored (Google Search grounding not available via OpenAI API).
     """
-    if not GEMINI_API_KEY:
-        log.error("GEMINI_API_KEY is not set!")
-        return ""
-
-    # Combine system prompt and user prompt into a single message
-    full_prompt = f"{system}\n\n{prompt}" if system else prompt
-
-    request_body = {
-        "contents": [{"parts": [{"text": full_prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.3,
-        },
-    }
-    if use_search:
-        request_body["tools"] = [{"google_search": {}}]
-
-    def _do_request():
-        resp = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            headers={"Content-Type": "application/json"},
-            json=request_body,
-            timeout=60,
-        )
-        return resp
-
-    def _extract_text(resp):
-        data = resp.json()
-        if "candidates" in data:
-            parts = data["candidates"][0]["content"]["parts"]
-            text_parts = [p["text"] for p in parts if "text" in p]
-            return " ".join(text_parts).strip()
-        log.error(f"Gemini returned no candidates: {resp.text[:200]}")
-        return ""
-
+    from openai import OpenAI
+    
+    client = OpenAI()  # Uses pre-configured OPENAI_API_KEY and OPENAI_BASE_URL
+    
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    
     for attempt in range(LLM_MAX_RETRIES + 1):
         try:
-            resp = _do_request()
-
-            if resp.status_code == 200:
-                return _extract_text(resp)
-
-            if resp.status_code in LLM_RETRYABLE_STATUS_CODES:
-                # Exponential backoff: 3s, 6s, 12s
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.3,
+            )
+            content = response.choices[0].message.content
+            if content:
+                return content.strip()
+            log.error("LLM returned empty content")
+            return ""
+        except Exception as e:
+            error_str = str(e)
+            if any(code in error_str for code in ["429", "500", "502", "503", "504", "rate_limit", "overloaded"]):
                 wait = 3 * (2 ** attempt)
-                log.warning(f"Gemini {resp.status_code} error (attempt {attempt + 1}/{LLM_MAX_RETRIES + 1}), retrying in {wait}s...")
+                log.warning(f"LLM error (attempt {attempt + 1}/{LLM_MAX_RETRIES + 1}), retrying in {wait}s: {error_str[:100]}")
                 time.sleep(wait)
                 continue
-
-            # Non-retryable error
-            log.error(f"Gemini error {resp.status_code}: {resp.text[:200]}")
+            log.error(f"LLM call failed: {error_str[:200]}")
             return ""
-
-        except requests.exceptions.Timeout:
-            wait = 3 * (2 ** attempt)
-            log.warning(f"Gemini request timed out (attempt {attempt + 1}/{LLM_MAX_RETRIES + 1}), retrying in {wait}s...")
-            time.sleep(wait)
-            continue
-        except Exception as e:
-            log.error(f"LLM call failed: {e}")
-            return ""
-
-    log.error(f"Gemini failed after {LLM_MAX_RETRIES + 1} attempts")
+    
+    log.error(f"LLM failed after {LLM_MAX_RETRIES + 1} attempts")
     return ""
 
 
@@ -914,8 +884,8 @@ def main():
     log.info("=" * 60)
 
     # Validate required env vars
-    if not GEMINI_API_KEY:
-        log.error("GEMINI_API_KEY is not set!")
+    if not os.environ.get("OPENAI_API_KEY"):
+        log.error("OPENAI_API_KEY is not set!")
         return
 
     # Step 1: Fetch all RSS feeds

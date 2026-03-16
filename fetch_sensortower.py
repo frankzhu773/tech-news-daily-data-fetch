@@ -35,13 +35,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 ST_API_KEY = os.environ.get("SENSORTOWER_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 ST_BASE = "https://api.sensortower.com"
 
 DATA_DELAY_DAYS = 2  # Sensor Tower data is typically 2 days behind
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+# LLM via OpenAI-compatible API (pre-configured)
+LLM_MODEL = "gemini-2.5-flash"
 
 # ─── Rate limiter for SensorTower API (max ~5 req/s to stay safe) ────────────
 _st_rate_lock = threading.Lock()
@@ -65,43 +65,40 @@ _cache_lock = threading.Lock()
 
 
 def call_gemini(prompt, system_instruction, max_tokens=2000, use_search=False, retries=3):
-    """Call Gemini API with retry logic and exponential backoff."""
-    if not GEMINI_API_KEY:
-        return None
-
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "systemInstruction": {"parts": [{"text": system_instruction}]},
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3},
-    }
-    if use_search:
-        body["tools"] = [{"google_search": {}}]
-
+    """Call gemini-2.5-flash via OpenAI-compatible API with retry logic."""
+    from openai import OpenAI
+    
+    client = OpenAI()  # Uses pre-configured OPENAI_API_KEY and OPENAI_BASE_URL
+    
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+    
     for attempt in range(retries):
         try:
-            resp = requests.post(
-                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-                headers={"Content-Type": "application/json"},
-                json=body,
-                timeout=30,
+            response = client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.3,
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if "candidates" in data:
-                    parts = data["candidates"][0]["content"]["parts"]
-                    text_parts = [p["text"] for p in parts if "text" in p]
-                    return " ".join(text_parts).strip()
-            elif resp.status_code in (429, 500, 502, 503, 504):
+            content = response.choices[0].message.content
+            if content:
+                return content.strip()
+            return None
+        except Exception as e:
+            error_str = str(e)
+            if any(code in error_str for code in ["429", "500", "502", "503", "504", "rate_limit", "overloaded"]):
                 wait = 3 * (2 ** attempt)
-                print(f"    Gemini {resp.status_code}, retrying in {wait}s (attempt {attempt+1}/{retries})...")
+                print(f"    LLM error, retrying in {wait}s (attempt {attempt+1}/{retries}): {error_str[:100]}")
                 time.sleep(wait)
             else:
-                print(f"    Gemini error {resp.status_code}: {resp.text[:200]}")
-                return None
-        except Exception as e:
-            print(f"    Gemini exception: {e}")
-            if attempt < retries - 1:
-                time.sleep(3)
+                print(f"    LLM exception: {error_str[:200]}")
+                if attempt < retries - 1:
+                    time.sleep(3)
+                else:
+                    return None
     return None
 
 
@@ -111,7 +108,7 @@ def batch_summarize_descriptions(rows):
     Produces exactly 2 sentences per app in English. Non-English descriptions
     are translated. App names that are not in English are kept as-is.
     """
-    if not rows or not GEMINI_API_KEY:
+    if not rows or not os.environ.get("OPENAI_API_KEY"):
         return rows
 
     print(f"\n  Batch summarizing {len(rows)} app descriptions...")
